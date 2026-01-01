@@ -1,0 +1,30 @@
+name: mcc-site
+description: Matthew Carlson Consulting website
+
+github:
+  repo: matthewcarlsonhome-cmd/mcc-site
+  default_branch: main
+  work_branch: dev
+
+tech_stack:
+  - nextjs
+  - typescript
+  - tailwind
+  - react
+
+commands:
+  install: npm install
+  dev: npm run dev
+  build: npm run build
+  test: npm test
+
+entry_points:
+  - src/app
+  - src/components
+  - public
+
+ignore_patterns:
+  - node_modules
+  - .git
+  - .next
+  - out

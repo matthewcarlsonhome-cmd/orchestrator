@@ -1,0 +1,32 @@
+name: meta-ad-builder
+description: Meta Ad Builder tool for creating and managing Facebook/Instagram ads
+
+github:
+  repo: matthewcarlsonhome-cmd/meta-ad-builder
+  default_branch: main
+  work_branch: dev
+
+tech_stack:
+  - python
+  - fastapi
+  - react
+  - typescript
+  - postgresql
+
+commands:
+  install: pip install -r requirements.txt && cd frontend && npm install
+  dev: uvicorn app.main:app --reload
+  build: cd frontend && npm run build
+  test: pytest
+
+entry_points:
+  - app
+  - frontend/src
+  - tests
+
+ignore_patterns:
+  - node_modules
+  - .git
+  - __pycache__
+  - .venv
+  - dist

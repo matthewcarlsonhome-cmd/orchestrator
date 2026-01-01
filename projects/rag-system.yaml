@@ -1,0 +1,32 @@
+name: rag-system
+description: Retrieval-Augmented Generation system
+
+github:
+  repo: matthewcarlsonhome-cmd/rag-system
+  default_branch: main
+  work_branch: dev
+
+tech_stack:
+  - python
+  - langchain
+  - fastapi
+  - chromadb
+  - openai
+
+commands:
+  install: pip install -r requirements.txt
+  dev: uvicorn app.main:app --reload
+  test: pytest
+  lint: ruff check .
+
+entry_points:
+  - app
+  - src
+  - tests
+
+ignore_patterns:
+  - .git
+  - __pycache__
+  - .venv
+  - data
+  - chroma_db

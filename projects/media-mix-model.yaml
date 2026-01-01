@@ -1,0 +1,32 @@
+name: media-mix-model
+description: Python media mix modeling and data analysis tool
+
+github:
+  repo: matthewcarlsonhome-cmd/media-mix-model
+  default_branch: main
+  work_branch: dev
+
+tech_stack:
+  - python
+  - pandas
+  - numpy
+  - scikit-learn
+  - matplotlib
+  - jupyter
+
+commands:
+  install: pip install -r requirements.txt
+  test: pytest
+  lint: ruff check .
+
+entry_points:
+  - src
+  - notebooks
+  - tests
+
+ignore_patterns:
+  - .git
+  - __pycache__
+  - .venv
+  - data
+  - outputs

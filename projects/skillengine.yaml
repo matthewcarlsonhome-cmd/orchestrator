@@ -1,0 +1,33 @@
+name: skillengine
+description: SkillEngine platform for skill management and assessment
+
+github:
+  repo: matthewcarlsonhome-cmd/skillengine
+  default_branch: main
+  work_branch: dev
+
+tech_stack:
+  - nextjs
+  - typescript
+  - tailwind
+  - supabase
+  - react
+
+commands:
+  install: npm install
+  dev: npm run dev
+  build: npm run build
+  test: npm test
+  lint: npm run lint
+
+entry_points:
+  - src/app
+  - src/components
+  - src/lib
+
+ignore_patterns:
+  - node_modules
+  - .git
+  - .next
+  - dist
+  - build
