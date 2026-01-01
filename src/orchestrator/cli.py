@@ -288,5 +288,93 @@ def config_show():
     console.print(tree)
 
 
+@app.command()
+def server(
+    host: str = typer.Option("127.0.0.1", "--host", "-h", help="Server host"),
+    port: int = typer.Option(8420, "--port", "-p", help="Server port"),
+):
+    """Start the API server with dashboard."""
+    import uvicorn
+    from orchestrator.api.main import app as api_app
+
+    console.print(Panel(
+        f"[bold green]Starting Orchestrator Server[/bold green]\n"
+        f"API: http://{host}:{port}\n"
+        f"Dashboard: http://{host}:{port}\n\n"
+        f"[dim]Press Ctrl+C to stop[/dim]",
+        title="Orchestrator",
+    ))
+
+    uvicorn.run(api_app, host=host, port=port)
+
+
+@app.command()
+def checkpoints():
+    """List available checkpoints."""
+    from orchestrator.core.checkpoint import CheckpointManager
+
+    manager = CheckpointManager()
+    checkpoints_list = manager.list_checkpoints()
+
+    if not checkpoints_list:
+        console.print("[yellow]No checkpoints found[/yellow]")
+        return
+
+    table = Table(title="Checkpoints")
+    table.add_column("ID", style="cyan")
+    table.add_column("Timestamp")
+    table.add_column("Project")
+    table.add_column("Tasks")
+    table.add_column("Size")
+
+    for cp in checkpoints_list:
+        table.add_row(
+            cp.id[:20],
+            cp.timestamp.strftime("%Y-%m-%d %H:%M"),
+            cp.project,
+            f"{cp.tasks_completed}/{cp.tasks_total}",
+            f"{cp.size_bytes / 1024:.1f} KB",
+        )
+
+    console.print(table)
+    console.print(f"\n[dim]Stats: {manager.get_stats()}[/dim]")
+
+
+@app.command()
+def health():
+    """Check system health."""
+    import asyncio
+    from orchestrator.agents.pool import AgentPool
+    from orchestrator.core.health import HealthMonitor
+
+    async def check():
+        pool = AgentPool()
+        monitor = HealthMonitor(pool)
+        health = await monitor.check_system_health()
+
+        status_color = {
+            "healthy": "green",
+            "degraded": "yellow",
+            "unhealthy": "red",
+            "critical": "red",
+        }.get(health.status.value, "white")
+
+        console.print(Panel(
+            f"[bold {status_color}]{health.status.value.upper()}[/bold {status_color}]\n\n"
+            f"Uptime: {health.uptime_seconds:.0f}s\n"
+            f"Agents: {health.agents_healthy} healthy, {health.agents_degraded} degraded, {health.agents_unhealthy} unhealthy\n"
+            f"Tasks: {health.tasks_in_progress} in progress, {health.tasks_queued} queued\n"
+            f"Memory: {health.memory_usage_mb:.1f} MB",
+            title="System Health",
+        ))
+
+        if health.issues:
+            console.print("\n[yellow]Issues:[/yellow]")
+            for issue in health.issues:
+                console.print(f"  - {issue}")
+
+    asyncio.run(check())
+
+
 if __name__ == "__main__":
     app()
