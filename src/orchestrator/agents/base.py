@@ -322,12 +322,14 @@ class BaseAgent:
         blackboard: Blackboard,      # Shared notepad for agents to communicate
         approval_callback: Optional[Callable[[str], Awaitable[bool]]] = None,  # For approving shell commands
         on_message: Optional[Callable[[dict], Awaitable[None]]] = None,        # For inter-agent messages
+        on_status: Optional[Callable[[dict], Awaitable[None]]] = None,         # For status updates
     ):
         self.agent = agent
         self.project = project
         self.blackboard = blackboard
         self.approval_callback = approval_callback
         self.on_message = on_message
+        self.on_status = on_status  # Callback for status updates
 
         # Initialize the tools this agent can use
         # These are like the agent's "hands" - how it interacts with the codebase
@@ -344,6 +346,24 @@ class BaseAgent:
         self.task_completed = False          # Has the agent finished its task?
         self.task_result: Optional[dict] = None  # The final result/summary
         self.files_modified: list[str] = []  # List of files the agent changed
+
+        # Status tracking for progress updates
+        self._current_status = "idle"
+        self._last_status_time = datetime.now()
+        self._api_call_count = 0
+
+    async def _emit_status(self, status: str, details: str = ""):
+        """Emit a status update to the dashboard."""
+        self._current_status = status
+        if self.on_status:
+            await self.on_status({
+                "agent_id": self.agent.id,
+                "agent_type": self.agent.agent_type.value,
+                "status": status,
+                "details": details,
+                "api_calls": self._api_call_count,
+                "files_modified": len(self.files_modified),
+            })
 
     async def execute_task(self, task: Task) -> dict:
         """
@@ -393,15 +413,24 @@ class BaseAgent:
         # This loop continues until Claude calls "complete_task" or we hit the limit
         max_iterations = 50  # Safety limit to prevent infinite loops
         iteration = 0
+        self._api_call_count = 0
 
         while not self.task_completed and iteration < max_iterations:
             iteration += 1
+            self._api_call_count += 1
             self.agent.heartbeat()  # Let the system know we're still alive
 
             try:
+                # Emit status: waiting for API response
+                await self._emit_status(
+                    "calling_api",
+                    f"API call #{self._api_call_count} - waiting for Claude response..."
+                )
+
                 # Call Claude API in a background thread
                 # This is important! Without asyncio.to_thread(), this call
                 # would freeze the dashboard for 5-30 seconds while waiting
+                api_start = datetime.now()
                 response = await asyncio.to_thread(
                     self.client.messages.create,
                     model=config.model,      # Which Claude model to use
@@ -410,6 +439,13 @@ class BaseAgent:
                     tools=AGENT_TOOLS,       # What tools Claude can use
                     messages=self.messages,  # Full conversation history
                 )
+                api_duration = (datetime.now() - api_start).total_seconds()
+
+                # Emit status: got response, processing
+                await self._emit_status(
+                    "processing",
+                    f"Got response in {api_duration:.1f}s - processing tools..."
+                )
 
                 # Process Claude's response (execute any tools it wants to use)
                 await self._process_response(response)
@@ -417,6 +453,7 @@ class BaseAgent:
             except Exception as e:
                 # Something went wrong - log it and return failure
                 self.agent.record_error()
+                await self._emit_status("error", str(e))
                 return {
                     "success": False,
                     "error": str(e),

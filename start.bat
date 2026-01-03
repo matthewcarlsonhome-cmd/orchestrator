@@ -13,12 +13,20 @@ if errorlevel 1 (
     exit /b 1
 )
 
-:: Check for API key
-if "%ANTHROPIC_API_KEY%"=="" (
-    echo WARNING: ANTHROPIC_API_KEY is not set
+:: Check for API key - first check if .env file exists
+if exist ".env" (
+    echo Found .env file - will load API key from there
+) else if "%ANTHROPIC_API_KEY%"=="" (
+    echo WARNING: ANTHROPIC_API_KEY is not set and no .env file found
     echo.
-    set /p ANTHROPIC_API_KEY="Enter your Anthropic API key: "
-    setx ANTHROPIC_API_KEY "%ANTHROPIC_API_KEY%" >nul 2>&1
+    echo You can either:
+    echo   1. Create a .env file with: ANTHROPIC_API_KEY=your-key-here
+    echo   2. Enter your key now
+    echo.
+    set /p ANTHROPIC_API_KEY="Enter your Anthropic API key (or press Enter to skip): "
+    if not "%ANTHROPIC_API_KEY%"=="" (
+        setx ANTHROPIC_API_KEY "%ANTHROPIC_API_KEY%" >nul 2>&1
+    )
 )
 
 :: Always install/reinstall the package
@@ -28,7 +36,7 @@ pip install -e . --quiet
 if errorlevel 1 (
     echo.
     echo Trying alternative install method...
-    pip install anthropic fastapi uvicorn websockets pydantic pydantic-settings pyyaml rich typer aiosqlite gitpython httpx --quiet
+    pip install anthropic fastapi uvicorn websockets pydantic pydantic-settings python-dotenv pyyaml rich typer aiosqlite gitpython httpx --quiet
 )
 
 echo.

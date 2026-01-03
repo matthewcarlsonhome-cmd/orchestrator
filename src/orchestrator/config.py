@@ -2,10 +2,25 @@
 
 import os
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Optional
 
+from dotenv import load_dotenv  # Explicit .env loading
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Load .env file from multiple possible locations
+# This ensures .env is found whether running from repo root or elsewhere
+_possible_env_paths = [
+    Path.cwd() / ".env",                    # Current directory
+    Path(__file__).parent.parent.parent.parent / ".env",  # Repo root
+    Path.home() / ".orchestrator" / ".env",  # User's home directory
+]
+
+for env_path in _possible_env_paths:
+    if env_path.exists():
+        load_dotenv(env_path)
+        print(f"Loaded config from: {env_path}")
+        break
 
 
 class OrchestratorConfig(BaseSettings):
@@ -15,18 +30,21 @@ class OrchestratorConfig(BaseSettings):
         env_prefix="ORCHESTRATOR_",
         env_file=".env",
         env_file_encoding="utf-8",
+        extra="ignore",  # Ignore unknown fields in .env
     )
 
-    # API Configuration - also accepts ANTHROPIC_API_KEY without prefix
+    # API Configuration
+    # Accepts: ANTHROPIC_API_KEY or ORCHESTRATOR_ANTHROPIC_API_KEY
     anthropic_api_key: str = Field(default="", description="Anthropic API key")
     model: str = Field(default="claude-sonnet-4-20250514", description="Claude model to use")
 
     @field_validator("anthropic_api_key", mode="before")
     @classmethod
     def get_api_key(cls, v):
-        """Accept ANTHROPIC_API_KEY env var as fallback."""
+        """Accept ANTHROPIC_API_KEY env var as fallback (standard name)."""
         if v:
             return v
+        # Check standard Anthropic env var name
         return os.environ.get("ANTHROPIC_API_KEY", "")
 
     # Agent Configuration

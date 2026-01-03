@@ -263,7 +263,17 @@ DASHBOARD_HTML = """
                     updateUI();
                     break;
                 case 'agent_created':
-                    agents.push({id: event.agent_id, type: event.agent_type, status: 'idle'});
+                    agents.push({id: event.agent_id, type: event.agent_type, status: 'idle', details: ''});
+                    updateUI();
+                    break;
+                case 'agent_status':
+                    // Update agent status with detailed activity info
+                    const statusAgent = agents.find(a => a.id === event.agent_id);
+                    if (statusAgent) {
+                        statusAgent.status = event.status;
+                        statusAgent.details = event.details || '';
+                        statusAgent.api_calls = event.api_calls || 0;
+                    }
                     updateUI();
                     break;
             }
@@ -423,7 +433,7 @@ DASHBOARD_HTML = """
                 `).join('');
             }
 
-            // Agent list
+            // Agent list - with detailed status
             const agentContainer = document.getElementById('agent-list');
             if (agents.length === 0) {
                 agentContainer.innerHTML = '<p class="text-gray-400 text-sm">No agents active</p>';
@@ -434,12 +444,28 @@ DASHBOARD_HTML = """
                     backend: 'text-orange-400',
                     fullstack: 'text-green-400'
                 };
+                const statusColors = {
+                    idle: 'bg-gray-600 text-gray-400',
+                    calling_api: 'bg-yellow-500/20 text-yellow-400',
+                    processing: 'bg-blue-500/20 text-blue-400',
+                    error: 'bg-red-500/20 text-red-400'
+                };
+                const statusIcons = {
+                    calling_api: '⏳',
+                    processing: '⚙️',
+                    idle: '💤',
+                    error: '❌'
+                };
                 agentContainer.innerHTML = agents.map(a => `
-                    <div class="p-3 rounded bg-gray-700/50 border border-gray-600">
-                        <div class="flex items-center justify-between">
+                    <div class="p-3 rounded bg-gray-700/50 border border-gray-600 ${a.status === 'calling_api' ? 'pulse' : ''}">
+                        <div class="flex items-center justify-between mb-1">
                             <span class="${typeColors[a.type] || 'text-white'} font-medium">${a.type}</span>
-                            <span class="text-xs px-2 py-1 rounded ${a.status === 'working' ? 'bg-blue-500/20 text-blue-400' : 'bg-gray-600 text-gray-400'}">${a.status}</span>
+                            <span class="text-xs px-2 py-1 rounded ${statusColors[a.status] || 'bg-gray-600 text-gray-400'}">
+                                ${statusIcons[a.status] || ''} ${a.status}
+                            </span>
                         </div>
+                        ${a.details ? `<div class="text-xs text-gray-400 truncate" title="${a.details}">${a.details}</div>` : ''}
+                        ${a.api_calls ? `<div class="text-xs text-gray-500 mt-1">API calls: ${a.api_calls}</div>` : ''}
                     </div>
                 `).join('');
             }

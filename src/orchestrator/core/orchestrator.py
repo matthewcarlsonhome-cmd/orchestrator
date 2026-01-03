@@ -186,7 +186,7 @@ class Orchestrator:
             on_conflict=self._on_conflict,
         )
 
-        # Create executor
+        # Create executor with status callback for real-time dashboard updates
         self.executors[project_name] = ParallelExecutor(
             pool=self.agent_pool,
             scheduler=self.scheduler,
@@ -195,7 +195,15 @@ class Orchestrator:
             on_task_start=self._on_task_start,
             on_task_complete=self._on_task_complete,
             on_task_error=self._on_task_error,
+            on_agent_status=self._on_agent_status,  # Real-time status updates
         )
+
+    async def _on_agent_status(self, status_data: dict) -> None:
+        """Handle agent status updates and broadcast to dashboard."""
+        await self._emit_progress({
+            "type": "agent_status",
+            **status_data,
+        })
 
     async def _on_conflict(self, conflict) -> None:
         """Handle conflict detection."""

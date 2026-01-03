@@ -46,6 +46,7 @@ class ParallelExecutor:
         on_task_start: Optional[Callable[[Task, Agent], Awaitable[None]]] = None,
         on_task_complete: Optional[Callable[[Task, dict], Awaitable[None]]] = None,
         on_task_error: Optional[Callable[[Task, str], Awaitable[None]]] = None,
+        on_agent_status: Optional[Callable[[dict], Awaitable[None]]] = None,
     ):
         self.pool = pool
         self.scheduler = scheduler
@@ -54,6 +55,7 @@ class ParallelExecutor:
         self.on_task_start = on_task_start
         self.on_task_complete = on_task_complete
         self.on_task_error = on_task_error
+        self.on_agent_status = on_agent_status  # For real-time status updates
 
         # Active executions
         self.active_executions: dict[str, TaskExecution] = {}
@@ -195,6 +197,7 @@ class ParallelExecutor:
             blackboard=blackboard,
             approval_callback=self.approval_callback,
             on_message=self._handle_agent_message,
+            on_status=self._handle_agent_status,  # Pass status callback
         )
 
         result = await base_agent.execute_task(task)
@@ -202,6 +205,11 @@ class ParallelExecutor:
         result["agent_id"] = agent.id
 
         return result
+
+    async def _handle_agent_status(self, status_data: dict) -> None:
+        """Handle status updates from agents and forward to dashboard."""
+        if self.on_agent_status:
+            await self.on_agent_status(status_data)
 
     async def _handle_agent_message(self, message_data: dict) -> None:
         """Handle messages from agents."""
