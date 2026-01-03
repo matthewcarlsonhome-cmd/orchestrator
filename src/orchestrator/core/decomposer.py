@@ -1,9 +1,22 @@
-"""Task decomposition using Claude API."""
+"""
+Task Decomposer - Breaks down high-level instructions into specific tasks.
 
+This module uses the Claude API to intelligently analyze user instructions
+and split them into smaller, actionable tasks that can be assigned to
+specialized agents (like frontend dev, backend dev, etc.).
+
+Example: If user says "Add a login page", this might create tasks like:
+  1. "Design authentication flow" (for architect agent)
+  2. "Build login form UI" (for frontend agent)
+  3. "Create auth API endpoint" (for backend agent)
+  4. "Write login tests" (for tester agent)
+"""
+
+import asyncio  # For running blocking code without freezing the UI
 import json
 from typing import Optional
 
-from anthropic import Anthropic
+from anthropic import Anthropic  # Claude API client
 
 from orchestrator.config import config
 from orchestrator.models.task import Task, AgentTypeHint, TaskPriority
@@ -83,10 +96,36 @@ DECOMPOSE_TOOL = {
 
 
 class TaskDecomposer:
-    """Decomposes high-level instructions into atomic tasks."""
+    """
+    Breaks down high-level instructions into atomic (small, specific) tasks.
+
+    Think of this like a project manager who takes a big request like
+    "build a shopping cart" and splits it into specific tickets that
+    individual developers can work on.
+    """
 
     def __init__(self):
+        # Create a connection to Claude API using your API key
         self.client = Anthropic(api_key=config.anthropic_api_key)
+
+    def _call_claude(self, project_context: str):
+        """
+        Make an API call to Claude to analyze and decompose the task.
+
+        This is a "synchronous" call - it waits for Claude to respond
+        before continuing. We wrap it in asyncio.to_thread() elsewhere
+        so it doesn't freeze the dashboard while waiting.
+        """
+        return self.client.messages.create(
+            model=config.model,          # Which Claude model to use (e.g., claude-sonnet)
+            max_tokens=4096,             # Max length of Claude's response
+            system=DECOMPOSER_SYSTEM_PROMPT,  # Instructions telling Claude how to behave
+            tools=[DECOMPOSE_TOOL],      # Give Claude a structured way to return tasks
+            messages=[{
+                "role": "user",
+                "content": f"Please decompose this task into subtasks:\n\n{project_context}"
+            }]
+        )
 
     def decompose(
         self,
@@ -95,17 +134,52 @@ class TaskDecomposer:
         context: Optional[str] = None,
     ) -> list[Task]:
         """
-        Decompose instructions into a list of tasks.
+        Break down instructions into tasks (synchronous/blocking version).
 
         Args:
-            instructions: High-level instructions from user
-            project: Project to work on
-            context: Optional additional context
+            instructions: What the user wants done (e.g., "Add user login")
+            project: The project we're working on (has tech stack info, etc.)
+            context: Optional extra context about the codebase
 
         Returns:
-            List of Task objects with dependencies set
+            A list of Task objects ready to be assigned to agents
         """
-        # Build the prompt
+        project_context = self._build_context(instructions, project, context)
+        response = self._call_claude(project_context)
+        return self._parse_response(response, project)
+
+    async def decompose_async(
+        self,
+        instructions: str,
+        project: Project,
+        context: Optional[str] = None,
+    ) -> list[Task]:
+        """
+        Break down instructions into tasks (async/non-blocking version).
+
+        This version runs the Claude API call in a separate thread so the
+        dashboard stays responsive while waiting for Claude's response.
+        This is important because Claude can take 5-30 seconds to respond!
+
+        The 'await asyncio.to_thread()' magic moves the blocking call to
+        a background thread, letting other things (like the dashboard)
+        keep running.
+        """
+        project_context = self._build_context(instructions, project, context)
+        # Run the blocking API call in a thread pool - this is the key fix!
+        response = await asyncio.to_thread(self._call_claude, project_context)
+        return self._parse_response(response, project)
+
+    def _build_context(self, instructions: str, project: Project, context: Optional[str] = None) -> str:
+        """
+        Build a context string that gives Claude all the info it needs.
+
+        This includes:
+        - Project name
+        - Tech stack (React, Python, etc.)
+        - The user's instructions
+        - Any extra context we've discovered about the codebase
+        """
         project_context = f"""
 ## Project: {project.name}
 - Tech Stack: {', '.join(project.config.tech_stack)}
@@ -116,27 +190,27 @@ class TaskDecomposer:
 """
         if context:
             project_context += f"\n## Additional Context\n{context}"
+        return project_context
 
-        # Call Claude to decompose
-        response = self.client.messages.create(
-            model=config.model,
-            max_tokens=4096,
-            system=DECOMPOSER_SYSTEM_PROMPT,
-            tools=[DECOMPOSE_TOOL],
-            messages=[{
-                "role": "user",
-                "content": f"Please decompose this task into subtasks:\n\n{project_context}"
-            }]
-        )
+    def _parse_response(self, response, project: Project) -> list[Task]:
+        """
+        Parse Claude's response and convert it into Task objects.
 
-        # Extract tasks from tool use
+        Claude returns its response in a structured format using "tool use".
+        This method extracts the task data from that response and converts
+        each task into a proper Task object that our system can work with.
+        """
+        # Extract tasks from Claude's tool use response
+        # Claude uses "tools" to return structured data (like JSON)
         tasks = []
         task_data = []
 
+        # Loop through Claude's response blocks looking for the task data
         for block in response.content:
+            # Check if this block is Claude using our "create_tasks" tool
             if block.type == "tool_use" and block.name == "create_tasks":
                 task_data = block.input.get("tasks", [])
-                break
+                break  # Found it, stop looking
 
         # Convert to Task objects
         priority_map = {

@@ -282,7 +282,7 @@ class Orchestrator:
             })
 
             if use_llm_decomposition:
-                tasks = self.decomposer.decompose(instructions, project)
+                tasks = await self.decomposer.decompose_async(instructions, project)
             else:
                 tasks = self.decomposer.decompose_simple(instructions, project)
 

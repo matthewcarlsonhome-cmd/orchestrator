@@ -29,6 +29,10 @@ DASHBOARD_HTML = """
         body { background: #111827; color: #f3f4f6; }
         .pulse { animation: pulse 2s infinite; }
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .task-clickable { cursor: pointer; transition: all 0.2s; }
+        .task-clickable:hover { transform: translateX(4px); }
+        .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 50; }
+        .modal.active { display: flex; align-items: center; justify-content: center; }
     </style>
 </head>
 <body class="min-h-screen p-6">
@@ -43,6 +47,7 @@ DASHBOARD_HTML = """
                 <div class="flex items-center gap-2">
                     <div id="ws-status" class="w-3 h-3 rounded-full bg-red-500"></div>
                     <span id="ws-text" class="text-sm text-gray-400">Connecting...</span>
+                    <button onclick="connectWebSocket()" class="ml-2 text-xs text-blue-400 hover:text-blue-300">Reconnect</button>
                 </div>
                 <div id="running-indicator" class="hidden flex items-center gap-2">
                     <div class="w-3 h-3 rounded-full bg-blue-500 pulse"></div>
@@ -52,8 +57,8 @@ DASHBOARD_HTML = """
             </div>
         </header>
 
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <!-- Left Column -->
+        <div class="grid grid-cols-1 lg:grid-cols-4 gap-6">
+            <!-- Left Column - Status & Controls -->
             <div class="space-y-6">
                 <!-- Status Card -->
                 <div class="bg-gray-800 rounded-lg p-6">
@@ -99,18 +104,7 @@ DASHBOARD_HTML = """
                         </button>
                     </form>
                 </div>
-            </div>
 
-            <!-- Middle Column - Tasks -->
-            <div class="bg-gray-800 rounded-lg p-6">
-                <h2 class="text-lg font-semibold text-white mb-4">Tasks <span id="task-count" class="text-gray-400">(0)</span></h2>
-                <div id="task-list" class="space-y-2 max-h-[500px] overflow-y-auto">
-                    <p class="text-gray-400 text-sm">No tasks yet</p>
-                </div>
-            </div>
-
-            <!-- Right Column -->
-            <div class="space-y-6">
                 <!-- Agents -->
                 <div class="bg-gray-800 rounded-lg p-6">
                     <h2 class="text-lg font-semibold text-white mb-4">Agents <span id="agent-list-count" class="text-gray-400">(0)</span></h2>
@@ -118,15 +112,47 @@ DASHBOARD_HTML = """
                         <p class="text-gray-400 text-sm">No agents active</p>
                     </div>
                 </div>
+            </div>
 
-                <!-- Activity Log -->
-                <div class="bg-gray-800 rounded-lg p-6">
-                    <h2 class="text-lg font-semibold text-white mb-4">Activity Log</h2>
-                    <div id="log-list" class="h-64 overflow-y-auto font-mono text-xs space-y-1">
-                        <p class="text-gray-400">Waiting for activity...</p>
-                    </div>
+            <!-- Middle Column - Tasks -->
+            <div class="bg-gray-800 rounded-lg p-6">
+                <h2 class="text-lg font-semibold text-white mb-4">Tasks <span id="task-count" class="text-gray-400">(0)</span></h2>
+                <p class="text-xs text-gray-500 mb-3">Click a task to view output</p>
+                <div id="task-list" class="space-y-2 max-h-[600px] overflow-y-auto">
+                    <p class="text-gray-400 text-sm">No tasks yet</p>
                 </div>
             </div>
+
+            <!-- Task Output Column -->
+            <div class="bg-gray-800 rounded-lg p-6">
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-lg font-semibold text-white">Task Output</h2>
+                    <button onclick="copyOutput()" class="text-xs text-blue-400 hover:text-blue-300">Copy</button>
+                </div>
+                <div id="selected-task-title" class="text-sm text-gray-400 mb-2">Select a task to view output</div>
+                <div id="task-output" class="bg-gray-900 rounded p-4 h-[550px] overflow-y-auto font-mono text-sm whitespace-pre-wrap">
+                    <span class="text-gray-500">Task output will appear here...</span>
+                </div>
+            </div>
+
+            <!-- Right Column - Activity Log -->
+            <div class="bg-gray-800 rounded-lg p-6">
+                <h2 class="text-lg font-semibold text-white mb-4">Activity Log</h2>
+                <div id="log-list" class="h-[600px] overflow-y-auto font-mono text-xs space-y-1">
+                    <p class="text-gray-400">Waiting for activity...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Task Detail Modal -->
+    <div id="task-modal" class="modal" onclick="closeModal(event)">
+        <div class="bg-gray-800 rounded-lg p-6 max-w-4xl w-full mx-4 max-h-[90vh] overflow-y-auto" onclick="event.stopPropagation()">
+            <div class="flex justify-between items-start mb-4">
+                <h2 id="modal-title" class="text-xl font-bold text-white">Task Details</h2>
+                <button onclick="closeModal()" class="text-gray-400 hover:text-white text-2xl">&times;</button>
+            </div>
+            <div id="modal-content" class="space-y-4"></div>
         </div>
     </div>
 
@@ -136,13 +162,22 @@ DASHBOARD_HTML = """
         let tasks = [];
         let agents = [];
         let logs = [];
+        let taskOutputs = {};  // Store task outputs/summaries
+        let selectedTaskId = null;
+        let reconnectAttempts = 0;
+        const maxReconnectAttempts = 10;
 
-        // WebSocket connection
+        // WebSocket connection with auto-reconnect
         function connectWebSocket() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.close();
+            }
+
             const wsUrl = `ws://${window.location.host}/ws`;
             ws = new WebSocket(wsUrl);
 
             ws.onopen = () => {
+                reconnectAttempts = 0;
                 document.getElementById('ws-status').className = 'w-3 h-3 rounded-full bg-green-500';
                 document.getElementById('ws-text').textContent = 'Connected';
                 addLog('system', 'Connected to server');
@@ -151,7 +186,19 @@ DASHBOARD_HTML = """
             ws.onclose = () => {
                 document.getElementById('ws-status').className = 'w-3 h-3 rounded-full bg-red-500';
                 document.getElementById('ws-text').textContent = 'Disconnected';
-                setTimeout(connectWebSocket, 3000);
+                // Auto-reconnect with exponential backoff
+                if (reconnectAttempts < maxReconnectAttempts) {
+                    const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
+                    reconnectAttempts++;
+                    document.getElementById('ws-text').textContent = `Reconnecting in ${delay/1000}s...`;
+                    setTimeout(connectWebSocket, delay);
+                } else {
+                    document.getElementById('ws-text').textContent = 'Connection failed - click Reconnect';
+                }
+            };
+
+            ws.onerror = () => {
+                console.error('WebSocket error');
             };
 
             ws.onmessage = (event) => {
@@ -167,6 +214,7 @@ DASHBOARD_HTML = """
                 case 'run_start':
                     isRunning = true;
                     tasks = [];
+                    taskOutputs = {};
                     updateUI();
                     break;
                 case 'run_complete':
@@ -187,18 +235,107 @@ DASHBOARD_HTML = """
                     break;
                 case 'task_completed':
                     const doneTask = tasks.find(t => t.id === event.task_id);
-                    if (doneTask) doneTask.status = 'completed';
+                    if (doneTask) {
+                        doneTask.status = 'completed';
+                        doneTask.summary = event.summary;
+                        doneTask.files_modified = event.files_modified || [];
+                    }
+                    // Store output for viewing
+                    taskOutputs[event.task_id] = {
+                        summary: event.summary || 'Task completed',
+                        files_modified: event.files_modified || [],
+                        timestamp: new Date().toISOString()
+                    };
                     updateUI();
+                    // Auto-select completed task to show output
+                    selectTask(event.task_id);
                     break;
                 case 'task_failed':
                     const failTask = tasks.find(t => t.id === event.task_id);
-                    if (failTask) failTask.status = 'failed';
+                    if (failTask) {
+                        failTask.status = 'failed';
+                        failTask.error = event.error;
+                    }
+                    taskOutputs[event.task_id] = {
+                        error: event.error || 'Task failed',
+                        timestamp: new Date().toISOString()
+                    };
                     updateUI();
                     break;
                 case 'agent_created':
                     agents.push({id: event.agent_id, type: event.agent_type, status: 'idle'});
                     updateUI();
                     break;
+            }
+        }
+
+        function selectTask(taskId) {
+            selectedTaskId = taskId;
+            const task = tasks.find(t => t.id === taskId);
+            const output = taskOutputs[taskId];
+
+            document.getElementById('selected-task-title').textContent = task ? task.title : 'Unknown task';
+
+            const outputEl = document.getElementById('task-output');
+            if (output) {
+                let html = '';
+                if (output.summary) {
+                    html += `<div class="text-green-400 mb-4"><strong>Summary:</strong>\\n${output.summary}</div>`;
+                }
+                if (output.error) {
+                    html += `<div class="text-red-400 mb-4"><strong>Error:</strong>\\n${output.error}</div>`;
+                }
+                if (output.files_modified && output.files_modified.length > 0) {
+                    html += `<div class="text-blue-400"><strong>Files Modified:</strong>\\n${output.files_modified.join('\\n')}</div>`;
+                }
+                outputEl.innerHTML = html || '<span class="text-gray-500">No output data</span>';
+            } else if (task && task.status === 'in_progress') {
+                outputEl.innerHTML = '<span class="text-yellow-400 pulse">Task in progress...</span>';
+            } else if (task && task.status === 'queued') {
+                outputEl.innerHTML = '<span class="text-gray-500">Task waiting in queue...</span>';
+            } else {
+                outputEl.innerHTML = '<span class="text-gray-500">No output available</span>';
+            }
+            updateUI();
+        }
+
+        function copyOutput() {
+            const outputEl = document.getElementById('task-output');
+            navigator.clipboard.writeText(outputEl.innerText).then(() => {
+                addLog('system', 'Output copied to clipboard');
+            });
+        }
+
+        function openTaskModal(taskId) {
+            const task = tasks.find(t => t.id === taskId);
+            const output = taskOutputs[taskId];
+            if (!task) return;
+
+            document.getElementById('modal-title').textContent = task.title;
+            let content = `
+                <div class="bg-gray-700 rounded p-4">
+                    <div class="text-sm text-gray-400 mb-2">Status: <span class="${task.status === 'completed' ? 'text-green-400' : task.status === 'failed' ? 'text-red-400' : 'text-blue-400'}">${task.status}</span></div>
+                    ${task.agent ? `<div class="text-sm text-gray-400">Agent: ${task.agent}</div>` : ''}
+                </div>
+            `;
+            if (output) {
+                if (output.summary) {
+                    content += `<div class="bg-gray-900 rounded p-4"><h3 class="text-green-400 font-bold mb-2">Summary</h3><pre class="whitespace-pre-wrap text-gray-300">${output.summary}</pre></div>`;
+                }
+                if (output.error) {
+                    content += `<div class="bg-gray-900 rounded p-4"><h3 class="text-red-400 font-bold mb-2">Error</h3><pre class="whitespace-pre-wrap text-gray-300">${output.error}</pre></div>`;
+                }
+                if (output.files_modified && output.files_modified.length > 0) {
+                    content += `<div class="bg-gray-900 rounded p-4"><h3 class="text-blue-400 font-bold mb-2">Files Modified</h3><ul class="list-disc list-inside text-gray-300">${output.files_modified.map(f => `<li>${f}</li>`).join('')}</ul></div>`;
+                }
+            }
+            document.getElementById('modal-content').innerHTML = content;
+            document.getElementById('task-modal').classList.add('active');
+        }
+
+        function closeModal(event) {
+            if (!event || event.target.id === 'task-modal') {
+                document.getElementById('task-modal').classList.remove('active');
             }
         }
 
@@ -255,7 +392,7 @@ DASHBOARD_HTML = """
             document.getElementById('task-count').textContent = `(${tasks.length})`;
             document.getElementById('agent-list-count').textContent = `(${agents.length})`;
 
-            // Task list
+            // Task list - clickable to show output
             const taskContainer = document.getElementById('task-list');
             if (tasks.length === 0) {
                 taskContainer.innerHTML = '<p class="text-gray-400 text-sm">No tasks yet</p>';
@@ -273,7 +410,8 @@ DASHBOARD_HTML = """
                     failed: 'bg-red-500/10 border-red-500/30'
                 };
                 taskContainer.innerHTML = tasks.map(t => `
-                    <div class="p-3 rounded border ${statusBg[t.status] || 'bg-gray-700'}">
+                    <div class="p-3 rounded border task-clickable ${statusBg[t.status] || 'bg-gray-700'} ${selectedTaskId === t.id ? 'ring-2 ring-blue-500' : ''}"
+                         onclick="selectTask('${t.id}')" ondblclick="openTaskModal('${t.id}')">
                         <div class="flex items-start gap-2">
                             <div class="w-2 h-2 rounded-full mt-2 ${statusColors[t.status] || 'bg-gray-500'}"></div>
                             <div class="flex-1 min-w-0">

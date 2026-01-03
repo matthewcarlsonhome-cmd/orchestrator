@@ -1,20 +1,39 @@
-"""Base agent class with Claude API integration."""
+"""
+Base Agent - The core "brain" of each AI coding agent.
 
+This module defines what an agent IS and what it CAN DO. Each agent:
+1. Gets assigned a task (like "build the login form")
+2. Uses Claude API to think about how to accomplish it
+3. Has access to tools (read files, write files, run commands)
+4. Works in a loop: think -> act -> observe -> repeat
+
+Think of an agent like a junior developer who:
+- Reads the task description
+- Looks at the existing code
+- Makes changes to files
+- Runs tests to verify their work
+- Reports back when done
+
+The "tools" are like the developer's IDE - they let the agent
+read/write files, search code, run commands, etc.
+"""
+
+import asyncio  # For running blocking code without freezing the dashboard
 import json
 from datetime import datetime
 from typing import Any, Callable, Optional, Awaitable
 
-from anthropic import Anthropic
+from anthropic import Anthropic  # The Claude API client
 
 from orchestrator.config import config
 from orchestrator.models.agent import Agent, AgentType, AgentStatus
 from orchestrator.models.task import Task
 from orchestrator.models.project import Project
 from orchestrator.models.blackboard import Blackboard, EntryType, BlackboardEntry
-from orchestrator.tools.file_ops import FileTools
-from orchestrator.tools.git_ops import GitTools
-from orchestrator.tools.shell import ShellTools, ShellApprovalRequired
-from orchestrator.agents.prompts import get_agent_system_prompt
+from orchestrator.tools.file_ops import FileTools     # Read/write/edit files
+from orchestrator.tools.git_ops import GitTools       # Git commands (commit, branch, etc.)
+from orchestrator.tools.shell import ShellTools, ShellApprovalRequired  # Run shell commands
+from orchestrator.agents.prompts import get_agent_system_prompt  # Agent personality prompts
 
 
 # Tool definitions for Claude API
@@ -279,15 +298,30 @@ AGENT_TOOLS = [
 
 
 class BaseAgent:
-    """Base class for all agents with Claude API integration."""
+    """
+    The main class that controls an AI coding agent.
+
+    Each agent has:
+    - A type (architect, frontend, backend, etc.) - defines personality
+    - Access to tools (file operations, git, shell commands)
+    - A connection to Claude API for thinking/reasoning
+    - A conversation history (messages) with Claude
+
+    The agent works in a loop:
+    1. Send task + context to Claude
+    2. Claude responds with text and/or tool calls
+    3. Execute any tool calls (read file, write file, etc.)
+    4. Send tool results back to Claude
+    5. Repeat until Claude calls "complete_task"
+    """
 
     def __init__(
         self,
-        agent: Agent,
-        project: Project,
-        blackboard: Blackboard,
-        approval_callback: Optional[Callable[[str], Awaitable[bool]]] = None,
-        on_message: Optional[Callable[[dict], Awaitable[None]]] = None,
+        agent: Agent,                # The agent's identity (type, id, status)
+        project: Project,            # The project being worked on
+        blackboard: Blackboard,      # Shared notepad for agents to communicate
+        approval_callback: Optional[Callable[[str], Awaitable[bool]]] = None,  # For approving shell commands
+        on_message: Optional[Callable[[dict], Awaitable[None]]] = None,        # For inter-agent messages
     ):
         self.agent = agent
         self.project = project
@@ -295,32 +329,52 @@ class BaseAgent:
         self.approval_callback = approval_callback
         self.on_message = on_message
 
-        # Initialize tools
-        self.file_tools = FileTools(project)
-        self.git_tools = GitTools(project)
-        self.shell_tools = ShellTools(project, approval_callback)
+        # Initialize the tools this agent can use
+        # These are like the agent's "hands" - how it interacts with the codebase
+        self.file_tools = FileTools(project)      # Read, write, edit, search files
+        self.git_tools = GitTools(project)        # Git operations (commit, branch)
+        self.shell_tools = ShellTools(project, approval_callback)  # Run npm, python, etc.
 
-        # Claude client
+        # Create connection to Claude API
+        # This is the agent's "brain" - it makes decisions using Claude
         self.client = Anthropic(api_key=config.anthropic_api_key)
 
-        # Conversation state
-        self.messages: list[dict] = []
-        self.task_completed = False
-        self.task_result: Optional[dict] = None
-        self.files_modified: list[str] = []
+        # Conversation state - keeps track of the back-and-forth with Claude
+        self.messages: list[dict] = []      # Full conversation history
+        self.task_completed = False          # Has the agent finished its task?
+        self.task_result: Optional[dict] = None  # The final result/summary
+        self.files_modified: list[str] = []  # List of files the agent changed
 
     async def execute_task(self, task: Task) -> dict:
-        """Execute a task and return the result."""
+        """
+        Execute a task and return the result.
+
+        This is the main method that runs the agent. It:
+        1. Sets up the task context
+        2. Runs a loop where it talks to Claude
+        3. Claude can use tools (read/write files, etc.)
+        4. Continues until Claude marks the task complete
+
+        Args:
+            task: The Task object containing title and description
+
+        Returns:
+            A dictionary with 'success', 'summary', 'files_modified', etc.
+        """
+        # Mark this agent as working on this task
         self.agent.assign_task(task.id, self.project.name)
+
+        # Reset state for new task
         self.task_completed = False
         self.task_result = None
         self.files_modified = []
         self.messages = []
 
-        # Build system prompt
+        # Build the "system prompt" - this tells Claude what kind of agent it is
+        # and gives it context about the project (like tech stack, file structure)
         context = self._build_context()
         system_prompt = get_agent_system_prompt(
-            agent_type=self.agent.agent_type,
+            agent_type=self.agent.agent_type,    # architect, frontend, backend, etc.
             agent_id=self.agent.id,
             project_name=self.project.name,
             tech_stack=self.project.config.tech_stack,
@@ -329,33 +383,39 @@ class BaseAgent:
             context=context,
         )
 
-        # Initial user message is the task
+        # Start the conversation with Claude by giving it the task
         self.messages.append({
             "role": "user",
             "content": f"Please complete this task: {task.title}\n\n{task.description}"
         })
 
-        # Run the agent loop
-        max_iterations = 50  # Safety limit
+        # ========== THE MAIN AGENT LOOP ==========
+        # This loop continues until Claude calls "complete_task" or we hit the limit
+        max_iterations = 50  # Safety limit to prevent infinite loops
         iteration = 0
 
         while not self.task_completed and iteration < max_iterations:
             iteration += 1
-            self.agent.heartbeat()
+            self.agent.heartbeat()  # Let the system know we're still alive
 
             try:
-                response = self.client.messages.create(
-                    model=config.model,
-                    max_tokens=8192,
-                    system=system_prompt,
-                    tools=AGENT_TOOLS,
-                    messages=self.messages,
+                # Call Claude API in a background thread
+                # This is important! Without asyncio.to_thread(), this call
+                # would freeze the dashboard for 5-30 seconds while waiting
+                response = await asyncio.to_thread(
+                    self.client.messages.create,
+                    model=config.model,      # Which Claude model to use
+                    max_tokens=8192,         # Max response length
+                    system=system_prompt,    # Agent's personality/instructions
+                    tools=AGENT_TOOLS,       # What tools Claude can use
+                    messages=self.messages,  # Full conversation history
                 )
 
-                # Process response
+                # Process Claude's response (execute any tools it wants to use)
                 await self._process_response(response)
 
             except Exception as e:
+                # Something went wrong - log it and return failure
                 self.agent.record_error()
                 return {
                     "success": False,
@@ -363,12 +423,14 @@ class BaseAgent:
                     "files_modified": self.files_modified,
                 }
 
+        # Mark the agent as done with this task
         self.agent.complete_task()
 
+        # Return the results
         if self.task_result:
             return {
                 "success": True,
-                **self.task_result,
+                **self.task_result,  # Includes summary, follow_up_tasks, etc.
                 "files_modified": self.files_modified,
             }
 
