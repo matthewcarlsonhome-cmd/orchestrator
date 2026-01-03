@@ -2,7 +2,7 @@ name: mcc-site
 description: Matthew Carlson Consulting website
 
 github:
-  repo: matthewcarlsonhome-cmd/mcc-site
+  repo: matthewcarlsonhome-cmd/matthewcarlsonconsulting
   default_branch: main
   work_branch: dev
 
