@@ -135,17 +135,24 @@ class Orchestrator:
 
         if project.local_path.exists():
             git.open()
-            git.pull()
+            try:
+                git.pull()
+            except Exception:
+                # Repo might not have remote set up yet (new repo)
+                pass
         else:
             git.clone(github_token)
 
         project.is_cloned = True
         project.last_synced = datetime.utcnow()
 
+        status_msg = "initialized_new" if project.is_new_repo else "ready"
         await self._emit_progress({
             "type": "project_setup",
             "project": name,
-            "status": "ready",
+            "status": status_msg,
+            "is_new_repo": project.is_new_repo,
+            "local_path": str(project.local_path),
         })
 
         return project

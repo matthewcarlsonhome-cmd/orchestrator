@@ -18,7 +18,7 @@ class GitTools:
         self.repo: Optional[Repo] = None
 
     def clone(self, token: Optional[str] = None) -> bool:
-        """Clone the project repository."""
+        """Clone the project repository. Falls back to init if repo doesn't exist."""
         clone_url = self.project.config.github.get_clone_url()
 
         # Add token to URL if provided
@@ -37,7 +37,31 @@ class GitTools:
             self.project.is_cloned = True
             return True
         except GitCommandError as e:
+            # Check if it's a "not found" error - initialize locally instead
+            error_str = str(e).lower()
+            if "not found" in error_str or "repository not found" in error_str or "does not exist" in error_str:
+                return self.init_local()
             raise RuntimeError(f"Failed to clone repository: {e}")
+
+    def init_local(self) -> bool:
+        """Initialize a new local repository (when remote doesn't exist)."""
+        try:
+            self.project.local_path.mkdir(parents=True, exist_ok=True)
+            self.repo = Repo.init(self.project.local_path)
+
+            # Create initial README
+            readme_path = self.project.local_path / "README.md"
+            readme_path.write_text(f"# {self.project.config.name}\n\n{self.project.config.description}\n")
+
+            # Initial commit
+            self.repo.index.add(["README.md"])
+            self.repo.index.commit("Initial commit")
+
+            self.project.is_cloned = True
+            self.project.is_new_repo = True  # Flag that this is a fresh repo
+            return True
+        except Exception as e:
+            raise RuntimeError(f"Failed to initialize local repository: {e}")
 
     def open(self) -> bool:
         """Open an existing repository."""

@@ -72,6 +72,7 @@ class Project(BaseModel):
     local_path: Path = Field(..., description="Local path where project is cloned")
     current_branch: str = Field(default="main", description="Current working branch")
     is_cloned: bool = Field(default=False, description="Whether project is cloned locally")
+    is_new_repo: bool = Field(default=False, description="True if this is a freshly initialized repo (not cloned)")
     last_synced: Optional[datetime] = Field(default=None, description="Last git sync time")
 
     # Runtime context discovered by agents
