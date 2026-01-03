@@ -7,13 +7,368 @@ from typing import Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from orchestrator.config import config
 from orchestrator.core.orchestrator import Orchestrator
 from orchestrator.core.checkpoint import CheckpointManager
 from orchestrator.core.health import HealthMonitor
+
+
+# Embedded dashboard HTML (no separate React server needed)
+DASHBOARD_HTML = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Orchestrator Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background: #111827; color: #f3f4f6; }
+        .pulse { animation: pulse 2s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+    </style>
+</head>
+<body class="min-h-screen p-6">
+    <div id="app" class="max-w-7xl mx-auto">
+        <!-- Header -->
+        <header class="flex items-center justify-between mb-8">
+            <div>
+                <h1 class="text-3xl font-bold text-white">Orchestrator Dashboard</h1>
+                <p class="text-gray-400 mt-1">Multi-Agent Development System</p>
+            </div>
+            <div class="flex items-center gap-4">
+                <div class="flex items-center gap-2">
+                    <div id="ws-status" class="w-3 h-3 rounded-full bg-red-500"></div>
+                    <span id="ws-text" class="text-sm text-gray-400">Connecting...</span>
+                </div>
+                <div id="running-indicator" class="hidden flex items-center gap-2">
+                    <div class="w-3 h-3 rounded-full bg-blue-500 pulse"></div>
+                    <span class="text-sm text-blue-400">Running</span>
+                    <button onclick="stopRun()" class="ml-2 px-3 py-1 bg-red-600 hover:bg-red-700 text-white text-sm rounded">Stop</button>
+                </div>
+            </div>
+        </header>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <!-- Left Column -->
+            <div class="space-y-6">
+                <!-- Status Card -->
+                <div class="bg-gray-800 rounded-lg p-6">
+                    <h2 class="text-lg font-semibold text-white mb-4">System Status</h2>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div class="bg-gray-700 rounded p-3">
+                            <div class="text-xs text-gray-400 uppercase">Status</div>
+                            <div id="status-text" class="text-lg font-bold text-gray-400">Idle</div>
+                        </div>
+                        <div class="bg-gray-700 rounded p-3">
+                            <div class="text-xs text-gray-400 uppercase">Agents</div>
+                            <div id="agents-count" class="text-lg font-bold text-white">0 / 3</div>
+                        </div>
+                        <div class="bg-gray-700 rounded p-3">
+                            <div class="text-xs text-gray-400 uppercase">Completed</div>
+                            <div id="completed-count" class="text-lg font-bold text-green-400">0</div>
+                        </div>
+                        <div class="bg-gray-700 rounded p-3">
+                            <div class="text-xs text-gray-400 uppercase">In Progress</div>
+                            <div id="progress-count" class="text-lg font-bold text-blue-400">0</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Run Form -->
+                <div class="bg-gray-800 rounded-lg p-6">
+                    <h2 class="text-lg font-semibold text-white mb-4">Start New Run</h2>
+                    <form id="run-form" onsubmit="startRun(event)">
+                        <div class="mb-4">
+                            <label class="block text-sm text-gray-400 mb-1">Project</label>
+                            <select id="project-select" class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white">
+                                <option value="">Loading projects...</option>
+                            </select>
+                        </div>
+                        <div class="mb-4">
+                            <label class="block text-sm text-gray-400 mb-1">Instructions</label>
+                            <textarea id="instructions" rows="4" placeholder="What should the agents build?"
+                                class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white placeholder-gray-500 resize-none"></textarea>
+                        </div>
+                        <button type="submit" id="run-btn"
+                            class="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-medium py-2 rounded">
+                            Start Orchestration
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Middle Column - Tasks -->
+            <div class="bg-gray-800 rounded-lg p-6">
+                <h2 class="text-lg font-semibold text-white mb-4">Tasks <span id="task-count" class="text-gray-400">(0)</span></h2>
+                <div id="task-list" class="space-y-2 max-h-[500px] overflow-y-auto">
+                    <p class="text-gray-400 text-sm">No tasks yet</p>
+                </div>
+            </div>
+
+            <!-- Right Column -->
+            <div class="space-y-6">
+                <!-- Agents -->
+                <div class="bg-gray-800 rounded-lg p-6">
+                    <h2 class="text-lg font-semibold text-white mb-4">Agents <span id="agent-list-count" class="text-gray-400">(0)</span></h2>
+                    <div id="agent-list" class="space-y-2">
+                        <p class="text-gray-400 text-sm">No agents active</p>
+                    </div>
+                </div>
+
+                <!-- Activity Log -->
+                <div class="bg-gray-800 rounded-lg p-6">
+                    <h2 class="text-lg font-semibold text-white mb-4">Activity Log</h2>
+                    <div id="log-list" class="h-64 overflow-y-auto font-mono text-xs space-y-1">
+                        <p class="text-gray-400">Waiting for activity...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let isRunning = false;
+        let tasks = [];
+        let agents = [];
+        let logs = [];
+
+        // WebSocket connection
+        function connectWebSocket() {
+            const wsUrl = `ws://${window.location.host}/ws`;
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = () => {
+                document.getElementById('ws-status').className = 'w-3 h-3 rounded-full bg-green-500';
+                document.getElementById('ws-text').textContent = 'Connected';
+                addLog('system', 'Connected to server');
+            };
+
+            ws.onclose = () => {
+                document.getElementById('ws-status').className = 'w-3 h-3 rounded-full bg-red-500';
+                document.getElementById('ws-text').textContent = 'Disconnected';
+                setTimeout(connectWebSocket, 3000);
+            };
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                handleEvent(data);
+            };
+        }
+
+        function handleEvent(event) {
+            addLog(event.type, formatEvent(event));
+
+            switch(event.type) {
+                case 'run_start':
+                    isRunning = true;
+                    tasks = [];
+                    updateUI();
+                    break;
+                case 'run_complete':
+                    isRunning = false;
+                    updateUI();
+                    break;
+                case 'tasks_created':
+                    tasks = event.tasks.map(t => ({...t, status: 'queued'}));
+                    updateUI();
+                    break;
+                case 'task_started':
+                    const startTask = tasks.find(t => t.id === event.task_id);
+                    if (startTask) {
+                        startTask.status = 'in_progress';
+                        startTask.agent = event.agent_id;
+                    }
+                    updateUI();
+                    break;
+                case 'task_completed':
+                    const doneTask = tasks.find(t => t.id === event.task_id);
+                    if (doneTask) doneTask.status = 'completed';
+                    updateUI();
+                    break;
+                case 'task_failed':
+                    const failTask = tasks.find(t => t.id === event.task_id);
+                    if (failTask) failTask.status = 'failed';
+                    updateUI();
+                    break;
+                case 'agent_created':
+                    agents.push({id: event.agent_id, type: event.agent_type, status: 'idle'});
+                    updateUI();
+                    break;
+            }
+        }
+
+        function formatEvent(event) {
+            switch(event.type) {
+                case 'run_start': return `Started: ${event.project}`;
+                case 'run_complete': return `Completed in ${event.summary?.duration_seconds?.toFixed(1)}s`;
+                case 'tasks_created': return `Created ${event.count} tasks`;
+                case 'task_started': return `Started: ${event.task_title}`;
+                case 'task_completed': return `Completed: ${event.task_title}`;
+                case 'task_failed': return `Failed: ${event.error}`;
+                case 'agent_created': return `Agent created: ${event.agent_type}`;
+                default: return JSON.stringify(event);
+            }
+        }
+
+        function addLog(type, message) {
+            const time = new Date().toLocaleTimeString();
+            logs.push({time, type, message});
+            if (logs.length > 100) logs.shift();
+            updateLogs();
+        }
+
+        function updateLogs() {
+            const container = document.getElementById('log-list');
+            const colors = {
+                run_start: 'text-green-400',
+                run_complete: 'text-green-400',
+                task_started: 'text-cyan-400',
+                task_completed: 'text-green-400',
+                task_failed: 'text-red-400',
+                agent_created: 'text-purple-400',
+                system: 'text-gray-400'
+            };
+            container.innerHTML = logs.map(l =>
+                `<div><span class="text-gray-500">${l.time}</span> <span class="${colors[l.type] || 'text-gray-300'}">${l.message}</span></div>`
+            ).join('');
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function updateUI() {
+            // Running indicator
+            document.getElementById('running-indicator').className = isRunning ? 'flex items-center gap-2' : 'hidden';
+            document.getElementById('status-text').textContent = isRunning ? 'Running' : 'Idle';
+            document.getElementById('status-text').className = isRunning ? 'text-lg font-bold text-green-400' : 'text-lg font-bold text-gray-400';
+            document.getElementById('run-btn').disabled = isRunning;
+
+            // Counts
+            const completed = tasks.filter(t => t.status === 'completed').length;
+            const inProgress = tasks.filter(t => t.status === 'in_progress').length;
+            document.getElementById('completed-count').textContent = completed;
+            document.getElementById('progress-count').textContent = inProgress;
+            document.getElementById('agents-count').textContent = `${agents.length} / 3`;
+            document.getElementById('task-count').textContent = `(${tasks.length})`;
+            document.getElementById('agent-list-count').textContent = `(${agents.length})`;
+
+            // Task list
+            const taskContainer = document.getElementById('task-list');
+            if (tasks.length === 0) {
+                taskContainer.innerHTML = '<p class="text-gray-400 text-sm">No tasks yet</p>';
+            } else {
+                const statusColors = {
+                    queued: 'bg-yellow-500',
+                    in_progress: 'bg-blue-500',
+                    completed: 'bg-green-500',
+                    failed: 'bg-red-500'
+                };
+                const statusBg = {
+                    queued: 'bg-yellow-500/10 border-yellow-500/30',
+                    in_progress: 'bg-blue-500/10 border-blue-500/30',
+                    completed: 'bg-green-500/10 border-green-500/30',
+                    failed: 'bg-red-500/10 border-red-500/30'
+                };
+                taskContainer.innerHTML = tasks.map(t => `
+                    <div class="p-3 rounded border ${statusBg[t.status] || 'bg-gray-700'}">
+                        <div class="flex items-start gap-2">
+                            <div class="w-2 h-2 rounded-full mt-2 ${statusColors[t.status] || 'bg-gray-500'}"></div>
+                            <div class="flex-1 min-w-0">
+                                <div class="text-sm text-white truncate">${t.title}</div>
+                                <div class="text-xs text-gray-400 mt-1">${t.status}${t.agent ? ' • ' + t.agent : ''}</div>
+                            </div>
+                        </div>
+                    </div>
+                `).join('');
+            }
+
+            // Agent list
+            const agentContainer = document.getElementById('agent-list');
+            if (agents.length === 0) {
+                agentContainer.innerHTML = '<p class="text-gray-400 text-sm">No agents active</p>';
+            } else {
+                const typeColors = {
+                    architect: 'text-purple-400',
+                    frontend: 'text-cyan-400',
+                    backend: 'text-orange-400',
+                    fullstack: 'text-green-400'
+                };
+                agentContainer.innerHTML = agents.map(a => `
+                    <div class="p-3 rounded bg-gray-700/50 border border-gray-600">
+                        <div class="flex items-center justify-between">
+                            <span class="${typeColors[a.type] || 'text-white'} font-medium">${a.type}</span>
+                            <span class="text-xs px-2 py-1 rounded ${a.status === 'working' ? 'bg-blue-500/20 text-blue-400' : 'bg-gray-600 text-gray-400'}">${a.status}</span>
+                        </div>
+                    </div>
+                `).join('');
+            }
+        }
+
+        async function loadProjects() {
+            try {
+                const res = await fetch('/projects');
+                const data = await res.json();
+                const select = document.getElementById('project-select');
+                if (data.projects && data.projects.length > 0) {
+                    select.innerHTML = data.projects.map(p =>
+                        `<option value="${p.name}">${p.name} (${p.tech_stack?.slice(0,2).join(', ') || 'no stack'})</option>`
+                    ).join('');
+                } else {
+                    select.innerHTML = '<option value="">No projects configured</option>';
+                }
+            } catch (e) {
+                console.error('Failed to load projects:', e);
+            }
+        }
+
+        async function startRun(event) {
+            event.preventDefault();
+            const project = document.getElementById('project-select').value;
+            const instructions = document.getElementById('instructions').value;
+
+            if (!project || !instructions) {
+                alert('Please select a project and enter instructions');
+                return;
+            }
+
+            try {
+                const res = await fetch('/run', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({project, instructions})
+                });
+                if (res.ok) {
+                    isRunning = true;
+                    logs = [];
+                    updateUI();
+                } else {
+                    const err = await res.json();
+                    alert('Error: ' + err.detail);
+                }
+            } catch (e) {
+                alert('Failed to start: ' + e.message);
+            }
+        }
+
+        async function stopRun() {
+            try {
+                await fetch('/stop', {method: 'POST'});
+            } catch (e) {
+                console.error('Failed to stop:', e);
+            }
+        }
+
+        // Initialize
+        connectWebSocket();
+        loadProjects();
+        updateUI();
+    </script>
+</body>
+</html>
+"""
 
 
 # Global orchestrator instance
@@ -108,8 +463,13 @@ def create_app() -> FastAPI:
     )
 
     # Routes
-    @app.get("/")
+    @app.get("/", response_class=HTMLResponse)
     async def root():
+        """Serve the dashboard."""
+        return DASHBOARD_HTML
+
+    @app.get("/api")
+    async def api_root():
         """API root."""
         return {
             "name": "Orchestrator API",
