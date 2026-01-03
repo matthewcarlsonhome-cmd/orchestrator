@@ -1,9 +1,10 @@
 """Configuration management for the orchestrator."""
 
+import os
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -16,9 +17,17 @@ class OrchestratorConfig(BaseSettings):
         env_file_encoding="utf-8",
     )
 
-    # API Configuration
+    # API Configuration - also accepts ANTHROPIC_API_KEY without prefix
     anthropic_api_key: str = Field(default="", description="Anthropic API key")
     model: str = Field(default="claude-sonnet-4-20250514", description="Claude model to use")
+
+    @field_validator("anthropic_api_key", mode="before")
+    @classmethod
+    def get_api_key(cls, v):
+        """Accept ANTHROPIC_API_KEY env var as fallback."""
+        if v:
+            return v
+        return os.environ.get("ANTHROPIC_API_KEY", "")
 
     # Agent Configuration
     max_agents: int = Field(default=3, ge=1, le=10, description="Maximum concurrent agents")
