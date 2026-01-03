@@ -18,13 +18,17 @@ if "%ANTHROPIC_API_KEY%"=="" (
     echo WARNING: ANTHROPIC_API_KEY is not set
     echo.
     set /p ANTHROPIC_API_KEY="Enter your Anthropic API key: "
+    setx ANTHROPIC_API_KEY "%ANTHROPIC_API_KEY%" >nul 2>&1
 )
 
-:: Install dependencies if needed
-if not exist ".installed" (
-    echo Installing dependencies...
-    pip install -e . >nul 2>&1
-    echo. > .installed
+:: Always install/reinstall the package
+echo.
+echo Installing dependencies (this may take a minute)...
+pip install -e . --quiet
+if errorlevel 1 (
+    echo.
+    echo Trying alternative install method...
+    pip install anthropic fastapi uvicorn websockets pydantic pydantic-settings pyyaml rich typer aiosqlite gitpython httpx --quiet
 )
 
 echo.
@@ -38,5 +42,15 @@ echo Open your browser to http://localhost:8420
 echo Press Ctrl+C to stop the server
 echo.
 
-:: Start the server
-python -m orchestrator.cli server --host 0.0.0.0 --port 8420
+:: Start the server using the module directly
+python -c "from orchestrator.api.main import run_server; run_server(host='0.0.0.0', port=8420)"
+
+:: If that fails, try running uvicorn directly
+if errorlevel 1 (
+    echo.
+    echo Trying alternative startup...
+    set PYTHONPATH=%CD%\src
+    python -c "import sys; sys.path.insert(0, 'src'); from orchestrator.api.main import run_server; run_server(host='0.0.0.0', port=8420)"
+)
+
+pause
