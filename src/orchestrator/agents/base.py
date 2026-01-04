@@ -351,19 +351,58 @@ class BaseAgent:
         self._current_status = "idle"
         self._last_status_time = datetime.now()
         self._api_call_count = 0
+        self._total_input_tokens = 0
+        self._total_output_tokens = 0
 
-    async def _emit_status(self, status: str, details: str = ""):
-        """Emit a status update to the dashboard."""
+    async def _emit_status(self, status: str, details: str = "", tokens: dict = None):
+        """Emit a status update to the dashboard with token tracking."""
         self._current_status = status
         if self.on_status:
-            await self.on_status({
+            status_data = {
                 "agent_id": self.agent.id,
                 "agent_type": self.agent.agent_type.value,
                 "status": status,
                 "details": details,
                 "api_calls": self._api_call_count,
                 "files_modified": len(self.files_modified),
-            })
+                "total_input_tokens": self._total_input_tokens,
+                "total_output_tokens": self._total_output_tokens,
+                "conversation_turns": len(self.messages),
+            }
+            if tokens:
+                status_data["last_call_tokens"] = tokens
+            await self.on_status(status_data)
+
+    def _trim_conversation_history(self, keep_recent: int = 6):
+        """
+        Trim conversation history to prevent token explosion.
+
+        Strategy: Keep the first message (task description) and last N turns.
+        This preserves context about what we're doing while dropping old
+        tool results that are no longer relevant.
+
+        Args:
+            keep_recent: Number of recent message pairs to keep
+        """
+        if len(self.messages) <= keep_recent * 2 + 1:
+            return  # Not enough to trim
+
+        # Keep first message (the task) and last N turns
+        first_message = self.messages[0]
+        recent_messages = self.messages[-(keep_recent * 2):]
+
+        # Add a summary message to bridge the gap
+        summary = {
+            "role": "user",
+            "content": f"[CONTEXT: Previous conversation trimmed to save tokens. "
+                       f"Files modified so far: {', '.join(self.files_modified) or 'none'}. "
+                       f"Continue with the task.]"
+        }
+
+        self.messages = [first_message, summary] + recent_messages
+
+        # Note: This doesn't reduce _total_input_tokens counter, but the next
+        # API call will use fewer tokens since the message array is shorter
 
     async def execute_task(self, task: Task) -> dict:
         """
@@ -441,14 +480,31 @@ class BaseAgent:
                 )
                 api_duration = (datetime.now() - api_start).total_seconds()
 
-                # Emit status: got response, processing
+                # Track token usage from response
+                input_tokens = response.usage.input_tokens
+                output_tokens = response.usage.output_tokens
+                self._total_input_tokens += input_tokens
+                self._total_output_tokens += output_tokens
+
+                # Emit status with token info
                 await self._emit_status(
                     "processing",
-                    f"Got response in {api_duration:.1f}s - processing tools..."
+                    f"Response in {api_duration:.1f}s | This call: {input_tokens:,} in / {output_tokens:,} out | Total: {self._total_input_tokens:,} tokens",
+                    tokens={
+                        "input": input_tokens,
+                        "output": output_tokens,
+                        "total_input": self._total_input_tokens,
+                        "total_output": self._total_output_tokens,
+                    }
                 )
 
                 # Process Claude's response (execute any tools it wants to use)
                 await self._process_response(response)
+
+                # Trim conversation history if getting too large (prevents token explosion)
+                # Keep first message (task) + last N turns to stay under ~80k tokens
+                if self._total_input_tokens > 60000:
+                    self._trim_conversation_history()
 
             except Exception as e:
                 # Something went wrong - log it and return failure

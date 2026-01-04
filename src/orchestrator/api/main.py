@@ -267,12 +267,15 @@ DASHBOARD_HTML = """
                     updateUI();
                     break;
                 case 'agent_status':
-                    // Update agent status with detailed activity info
+                    // Update agent status with detailed activity info including tokens
                     const statusAgent = agents.find(a => a.id === event.agent_id);
                     if (statusAgent) {
                         statusAgent.status = event.status;
                         statusAgent.details = event.details || '';
                         statusAgent.api_calls = event.api_calls || 0;
+                        statusAgent.total_input_tokens = event.total_input_tokens || 0;
+                        statusAgent.total_output_tokens = event.total_output_tokens || 0;
+                        statusAgent.conversation_turns = event.conversation_turns || 0;
                     }
                     updateUI();
                     break;
@@ -456,6 +459,9 @@ DASHBOARD_HTML = """
                     idle: '💤',
                     error: '❌'
                 };
+                // Helper to format large numbers
+                const formatTokens = (n) => n >= 1000 ? (n/1000).toFixed(1) + 'k' : n;
+
                 agentContainer.innerHTML = agents.map(a => `
                     <div class="p-3 rounded bg-gray-700/50 border border-gray-600 ${a.status === 'calling_api' ? 'pulse' : ''}">
                         <div class="flex items-center justify-between mb-1">
@@ -465,7 +471,12 @@ DASHBOARD_HTML = """
                             </span>
                         </div>
                         ${a.details ? `<div class="text-xs text-gray-400 truncate" title="${a.details}">${a.details}</div>` : ''}
-                        ${a.api_calls ? `<div class="text-xs text-gray-500 mt-1">API calls: ${a.api_calls}</div>` : ''}
+                        <div class="text-xs text-gray-500 mt-1 grid grid-cols-2 gap-1">
+                            <span>API calls: ${a.api_calls || 0}</span>
+                            <span>Turns: ${a.conversation_turns || 0}</span>
+                            ${a.total_input_tokens ? `<span>In: ${formatTokens(a.total_input_tokens)}</span>` : ''}
+                            ${a.total_output_tokens ? `<span>Out: ${formatTokens(a.total_output_tokens)}</span>` : ''}
+                        </div>
                     </div>
                 `).join('');
             }
