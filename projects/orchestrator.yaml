@@ -1,0 +1,33 @@
+name: orchestrator
+description: Multi-agent orchestration system for autonomous coding
+
+github:
+  repo: matthewcarlsonhome-cmd/orchestrator
+  default_branch: main
+  work_branch: dev
+
+tech_stack:
+  - python
+  - fastapi
+  - asyncio
+  - anthropic
+  - websockets
+
+commands:
+  install: pip install -e .
+  dev: python -m orchestrator.api.main
+  test: pytest
+  lint: ruff check .
+
+entry_points:
+  - src/orchestrator
+  - projects
+  - tests
+
+ignore_patterns:
+  - .git
+  - __pycache__
+  - .venv
+  - dist
+  - build
+  - *.egg-info

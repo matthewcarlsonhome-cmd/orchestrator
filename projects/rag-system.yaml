@@ -2,7 +2,7 @@ name: rag-system
 description: Retrieval-Augmented Generation system
 
 github:
-  repo: matthewcarlsonhome-cmd/rag-system
+  repo: matthewcarlsonhome-cmd/RetrievalApp
   default_branch: main
   work_branch: dev
 

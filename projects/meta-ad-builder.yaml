@@ -2,7 +2,7 @@ name: meta-ad-builder
 description: Meta Ad Builder tool for creating and managing Facebook/Instagram ads
 
 github:
-  repo: matthewcarlsonhome-cmd/meta-ad-builder
+  repo: matthewcarlsonhome-cmd/MetaAdBuilder
   default_branch: main
   work_branch: dev
 
