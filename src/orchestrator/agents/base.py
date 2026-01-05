@@ -384,15 +384,49 @@ class BaseAgent:
         This preserves context about what we're doing while dropping old
         tool results that are no longer relevant.
 
+        IMPORTANT: Must keep tool_use and tool_result pairs together,
+        otherwise Claude API returns error 400.
+
         Args:
             keep_recent: Number of recent message pairs to keep
         """
         if len(self.messages) <= keep_recent * 2 + 1:
             return  # Not enough to trim
 
-        # Keep first message (the task) and last N turns
+        # Keep first message (the task)
         first_message = self.messages[0]
-        recent_messages = self.messages[-(keep_recent * 2):]
+
+        # Find a safe trim point - we need to avoid breaking tool_use/tool_result pairs
+        # Start from the end and work backwards to find keep_recent complete exchanges
+        recent_messages = []
+        i = len(self.messages) - 1
+        exchanges_kept = 0
+
+        while i >= 1 and exchanges_kept < keep_recent:
+            msg = self.messages[i]
+
+            # Check if this is a user message with tool_result
+            if msg["role"] == "user":
+                content = msg.get("content", [])
+                has_tool_result = isinstance(content, list) and any(
+                    isinstance(c, dict) and c.get("type") == "tool_result"
+                    for c in content
+                )
+
+                if has_tool_result:
+                    # Must include the preceding assistant message with tool_use
+                    if i > 0 and self.messages[i-1]["role"] == "assistant":
+                        recent_messages.insert(0, self.messages[i])      # tool_result
+                        recent_messages.insert(0, self.messages[i-1])    # tool_use
+                        i -= 2
+                        exchanges_kept += 1
+                        continue
+
+            # Regular message, just include it
+            recent_messages.insert(0, msg)
+            i -= 1
+            if msg["role"] == "assistant":
+                exchanges_kept += 1
 
         # Add a summary message to bridge the gap
         summary = {
@@ -403,9 +437,6 @@ class BaseAgent:
         }
 
         self.messages = [first_message, summary] + recent_messages
-
-        # Note: This doesn't reduce _total_input_tokens counter, but the next
-        # API call will use fewer tokens since the message array is shorter
 
     async def execute_task(self, task: Task) -> dict:
         """
