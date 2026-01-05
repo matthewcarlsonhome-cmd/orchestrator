@@ -36,9 +36,16 @@ class OrchestratorConfig(BaseSettings):
     # API Configuration
     # Accepts: ANTHROPIC_API_KEY or ORCHESTRATOR_ANTHROPIC_API_KEY
     anthropic_api_key: str = Field(default="", description="Anthropic API key")
-    # Default to Haiku for speed and cost efficiency
-    # Use claude-sonnet-4-20250514 for complex tasks requiring more reasoning
-    model: str = Field(default="claude-3-5-haiku-20241022", description="Claude model to use")
+
+    # Model Tiering - Use cheap models for routing, expensive for complex work
+    # Haiku: routing, exploration, boilerplate, test generation
+    # Sonnet: complex implementation, architecture decisions, debugging
+    model_routing: str = Field(default="claude-3-5-haiku-20241022", description="Model for routing/exploration")
+    model_coding: str = Field(default="claude-3-5-haiku-20241022", description="Model for standard coding")
+    model_complex: str = Field(default="claude-sonnet-4-20250514", description="Model for complex tasks")
+
+    # Legacy - maps to model_coding
+    model: str = Field(default="claude-3-5-haiku-20241022", description="Default model (use model_* for tiering)")
 
     @field_validator("anthropic_api_key", mode="before")
     @classmethod
@@ -51,9 +58,19 @@ class OrchestratorConfig(BaseSettings):
 
     # Agent Configuration
     max_agents: int = Field(default=2, ge=1, le=10, description="Maximum concurrent agents")
+    max_active_agents: int = Field(default=2, ge=1, le=5, description="Max agents making API calls simultaneously")
     agent_timeout_minutes: int = Field(default=30, description="Agent task timeout")
-    max_tokens_per_task: int = Field(default=30000, description="Max tokens before trimming conversation")
-    max_iterations_per_task: int = Field(default=20, description="Max API calls per task")
+    max_tokens_per_task: int = Field(default=15000, description="Max tokens before trimming conversation")
+    max_iterations_per_task: int = Field(default=10, description="Max API calls per task")
+
+    # Rate Limiting (Anthropic API limits)
+    tokens_per_minute: int = Field(default=80000, description="Token budget per minute (Tier 2 default)")
+    requests_per_minute: int = Field(default=1000, description="Request limit per minute")
+
+    # Token Optimization
+    use_diff_output: bool = Field(default=True, description="Agents output diffs instead of full files")
+    use_snippet_reads: bool = Field(default=True, description="Read file snippets instead of full files")
+    context_budget_per_agent: int = Field(default=8000, description="Max context tokens per agent iteration")
 
     # Paths
     projects_dir: Path = Field(
