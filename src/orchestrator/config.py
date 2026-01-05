@@ -101,7 +101,7 @@ class OrchestratorConfig(BaseSettings):
         default="branch_per_agent", description="Git branching strategy"
     )
     auto_push: bool = Field(
-        default=False, description="Automatically push changes to remote"
+        default=True, description="Automatically push changes to remote"
     )
     create_pull_requests: bool = Field(
         default=True, description="Create PRs instead of pushing to main"

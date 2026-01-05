@@ -103,6 +103,12 @@ DASHBOARD_HTML = """
                             Start Orchestration
                         </button>
                     </form>
+                    <button onclick="pushToGithub()" id="push-btn"
+                        class="w-full mt-3 bg-green-600 hover:bg-green-700 text-white font-medium py-2 rounded flex items-center justify-center gap-2">
+                        <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61-.546-1.385-1.335-1.755-1.335-1.755-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.605-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 21.795 24 17.295 24 12c0-6.63-5.37-12-12-12"/></svg>
+                        Push to GitHub
+                    </button>
+                    <div id="push-status" class="mt-2 text-sm text-center hidden"></div>
                 </div>
 
                 <!-- Agents -->
@@ -536,6 +542,41 @@ DASHBOARD_HTML = """
             }
         }
 
+        async function pushToGithub() {
+            const btn = document.getElementById('push-btn');
+            const status = document.getElementById('push-status');
+
+            btn.disabled = true;
+            btn.innerHTML = '<svg class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Pushing...';
+            status.className = 'mt-2 text-sm text-center text-yellow-400';
+            status.textContent = 'Pushing to GitHub...';
+            status.classList.remove('hidden');
+
+            try {
+                const res = await fetch('/push', {method: 'POST'});
+                const data = await res.json();
+
+                if (data.status === 'success') {
+                    status.className = 'mt-2 text-sm text-center text-green-400';
+                    status.textContent = data.message;
+                    addLog('git', 'Pushed to GitHub: ' + data.branch);
+                } else {
+                    status.className = 'mt-2 text-sm text-center text-red-400';
+                    status.textContent = data.message || 'Push failed';
+                    addLog('error', 'Git push failed: ' + data.message);
+                }
+            } catch (e) {
+                status.className = 'mt-2 text-sm text-center text-red-400';
+                status.textContent = 'Error: ' + e.message;
+            }
+
+            btn.disabled = false;
+            btn.innerHTML = '<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61-.546-1.385-1.335-1.755-1.335-1.755-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.605-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 21.795 24 17.295 24 12c0-6.63-5.37-12-12-12"/></svg> Push to GitHub';
+
+            // Hide status after 5 seconds
+            setTimeout(() => { status.classList.add('hidden'); }, 5000);
+        }
+
         // Initialize
         connectWebSocket();
         loadProjects();
@@ -727,6 +768,75 @@ def create_app() -> FastAPI:
 
         _orchestrator.stop()
         return {"status": "stopping"}
+
+    @app.post("/push")
+    async def push_to_github():
+        """Push changes to GitHub."""
+        if not _orchestrator or not _orchestrator.project:
+            raise HTTPException(status_code=503, detail="No project loaded")
+
+        try:
+            import subprocess
+            from pathlib import Path
+
+            project_path = Path(_orchestrator.project.local_path)
+            if not project_path.exists():
+                raise HTTPException(status_code=404, detail="Project path not found")
+
+            # Get current branch
+            result = subprocess.run(
+                ["git", "branch", "--show-current"],
+                cwd=project_path,
+                capture_output=True,
+                text=True
+            )
+            branch = result.stdout.strip() or "main"
+
+            # Check for changes
+            result = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=project_path,
+                capture_output=True,
+                text=True
+            )
+
+            has_changes = bool(result.stdout.strip())
+
+            if has_changes:
+                # Add all changes
+                subprocess.run(["git", "add", "-A"], cwd=project_path)
+
+                # Commit
+                subprocess.run(
+                    ["git", "commit", "-m", "Orchestrator: automated changes"],
+                    cwd=project_path,
+                    capture_output=True
+                )
+
+            # Push to remote
+            result = subprocess.run(
+                ["git", "push", "-u", "origin", branch],
+                cwd=project_path,
+                capture_output=True,
+                text=True
+            )
+
+            if result.returncode != 0:
+                return {
+                    "status": "error",
+                    "message": result.stderr or "Push failed",
+                    "branch": branch
+                }
+
+            return {
+                "status": "success",
+                "message": f"Pushed to origin/{branch}",
+                "branch": branch,
+                "had_changes": has_changes
+            }
+
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
 
     @app.get("/tasks")
     async def get_tasks():
