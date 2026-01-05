@@ -74,7 +74,7 @@ class OrchestratorConfig(BaseSettings):
 
     # Paths
     projects_dir: Path = Field(
-        default=Path("/tmp/orchestrator/projects"),
+        default=Path("C:/Website"),
         description="Directory for cloned projects",
     )
     data_dir: Path = Field(
