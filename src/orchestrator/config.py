@@ -36,7 +36,9 @@ class OrchestratorConfig(BaseSettings):
     # API Configuration
     # Accepts: ANTHROPIC_API_KEY or ORCHESTRATOR_ANTHROPIC_API_KEY
     anthropic_api_key: str = Field(default="", description="Anthropic API key")
-    model: str = Field(default="claude-sonnet-4-20250514", description="Claude model to use")
+    # Default to Haiku for speed and cost efficiency
+    # Use claude-sonnet-4-20250514 for complex tasks requiring more reasoning
+    model: str = Field(default="claude-3-5-haiku-20241022", description="Claude model to use")
 
     @field_validator("anthropic_api_key", mode="before")
     @classmethod
@@ -48,8 +50,10 @@ class OrchestratorConfig(BaseSettings):
         return os.environ.get("ANTHROPIC_API_KEY", "")
 
     # Agent Configuration
-    max_agents: int = Field(default=3, ge=1, le=10, description="Maximum concurrent agents")
+    max_agents: int = Field(default=2, ge=1, le=10, description="Maximum concurrent agents")
     agent_timeout_minutes: int = Field(default=30, description="Agent task timeout")
+    max_tokens_per_task: int = Field(default=30000, description="Max tokens before trimming conversation")
+    max_iterations_per_task: int = Field(default=20, description="Max API calls per task")
 
     # Paths
     projects_dir: Path = Field(

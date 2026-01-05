@@ -34,6 +34,7 @@ from orchestrator.tools.file_ops import FileTools     # Read/write/edit files
 from orchestrator.tools.git_ops import GitTools       # Git commands (commit, branch, etc.)
 from orchestrator.tools.shell import ShellTools, ShellApprovalRequired  # Run shell commands
 from orchestrator.agents.prompts import get_agent_system_prompt  # Agent personality prompts
+from orchestrator.core.shared_context import SharedContext  # Shared file cache
 
 
 # Tool definitions for Claude API
@@ -320,6 +321,7 @@ class BaseAgent:
         agent: Agent,                # The agent's identity (type, id, status)
         project: Project,            # The project being worked on
         blackboard: Blackboard,      # Shared notepad for agents to communicate
+        shared_context: Optional[SharedContext] = None,  # Shared file cache between agents
         approval_callback: Optional[Callable[[str], Awaitable[bool]]] = None,  # For approving shell commands
         on_message: Optional[Callable[[dict], Awaitable[None]]] = None,        # For inter-agent messages
         on_status: Optional[Callable[[dict], Awaitable[None]]] = None,         # For status updates
@@ -327,6 +329,7 @@ class BaseAgent:
         self.agent = agent
         self.project = project
         self.blackboard = blackboard
+        self.shared_context = shared_context or SharedContext()  # File cache to avoid re-reads
         self.approval_callback = approval_callback
         self.on_message = on_message
         self.on_status = on_status  # Callback for status updates
@@ -432,6 +435,14 @@ class BaseAgent:
         # Build the "system prompt" - this tells Claude what kind of agent it is
         # and gives it context about the project (like tech stack, file structure)
         context = self._build_context()
+
+        # Add shared context from other agents (cached files, discoveries)
+        shared_info = self.shared_context.get_context_for_agent(
+            self.agent.id, max_tokens=1000
+        )
+        if shared_info:
+            context = f"{context}\n\n## Shared Knowledge from Other Agents\n{shared_info}"
+
         system_prompt = get_agent_system_prompt(
             agent_type=self.agent.agent_type,    # architect, frontend, backend, etc.
             agent_id=self.agent.id,
@@ -443,14 +454,16 @@ class BaseAgent:
         )
 
         # Start the conversation with Claude by giving it the task
+        # Keep initial message concise to save tokens
         self.messages.append({
             "role": "user",
-            "content": f"Please complete this task: {task.title}\n\n{task.description}"
+            "content": f"Task: {task.title}\n\n{task.description}\n\nBe concise. Complete the task efficiently."
         })
 
         # ========== THE MAIN AGENT LOOP ==========
         # This loop continues until Claude calls "complete_task" or we hit the limit
-        max_iterations = 50  # Safety limit to prevent infinite loops
+        # Use config value for max iterations (default 20 for Haiku, saves tokens)
+        max_iterations = config.max_iterations_per_task
         iteration = 0
         self._api_call_count = 0
 
@@ -472,8 +485,8 @@ class BaseAgent:
                 api_start = datetime.now()
                 response = await asyncio.to_thread(
                     self.client.messages.create,
-                    model=config.model,      # Which Claude model to use
-                    max_tokens=8192,         # Max response length
+                    model=config.model,      # Which Claude model to use (default: Haiku)
+                    max_tokens=4096,         # Reduced for efficiency with Haiku
                     system=system_prompt,    # Agent's personality/instructions
                     tools=AGENT_TOOLS,       # What tools Claude can use
                     messages=self.messages,  # Full conversation history
@@ -502,9 +515,9 @@ class BaseAgent:
                 await self._process_response(response)
 
                 # Trim conversation history if getting too large (prevents token explosion)
-                # Keep first message (task) + last N turns to stay under ~80k tokens
-                if self._total_input_tokens > 60000:
-                    self._trim_conversation_history()
+                # Use config threshold (default 30k for Haiku)
+                if self._total_input_tokens > config.max_tokens_per_task:
+                    self._trim_conversation_history(keep_recent=4)  # More aggressive trim
 
             except Exception as e:
                 # Something went wrong - log it and return failure
@@ -580,23 +593,36 @@ class BaseAgent:
         """Execute a tool and return the result."""
         try:
             if name == "read_file":
-                return self.file_tools.read(
-                    inputs["path"],
-                    inputs.get("max_lines")
-                )
+                path = inputs["path"]
+                # Check shared cache first to avoid re-reading
+                cached = self.shared_context.get_file(path, self.agent.id)
+                if cached:
+                    return cached  # Use cached content
+
+                # Not cached, read from disk
+                content = self.file_tools.read(path, inputs.get("max_lines"))
+                # Cache for other agents
+                self.shared_context.cache_file(path, content, self.agent.id)
+                return content
 
             elif name == "write_file":
-                self.file_tools.write(inputs["path"], inputs["content"])
-                self.files_modified.append(inputs["path"])
+                path = inputs["path"]
+                self.file_tools.write(path, inputs["content"])
+                self.files_modified.append(path)
+                # Invalidate cache since file changed
+                self.shared_context.invalidate_file(path)
                 return {"success": True}
 
             elif name == "edit_file":
+                path = inputs["path"]
                 self.file_tools.edit(
-                    inputs["path"],
+                    path,
                     inputs["old_text"],
                     inputs["new_text"]
                 )
-                self.files_modified.append(inputs["path"])
+                self.files_modified.append(path)
+                # Invalidate cache since file changed
+                self.shared_context.invalidate_file(path)
                 return {"success": True}
 
             elif name == "list_directory":

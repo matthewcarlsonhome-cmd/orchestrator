@@ -14,6 +14,7 @@ from orchestrator.agents.base import BaseAgent
 from orchestrator.agents.pool import AgentPool
 from orchestrator.core.messaging import MessageBus, Message, MessageType
 from orchestrator.core.scheduler import TaskScheduler
+from orchestrator.core.shared_context import SharedContext
 
 
 @dataclass
@@ -56,6 +57,9 @@ class ParallelExecutor:
         self.on_task_complete = on_task_complete
         self.on_task_error = on_task_error
         self.on_agent_status = on_agent_status  # For real-time status updates
+
+        # Shared context for all agents to share file cache and discoveries
+        self.shared_context = SharedContext(max_cache_size=100, cache_ttl_minutes=30)
 
         # Active executions
         self.active_executions: dict[str, TaskExecution] = {}
@@ -195,6 +199,7 @@ class ParallelExecutor:
             agent=agent,
             project=project,
             blackboard=blackboard,
+            shared_context=self.shared_context,  # Share file cache between all agents
             approval_callback=self.approval_callback,
             on_message=self._handle_agent_message,
             on_status=self._handle_agent_status,  # Pass status callback
@@ -329,4 +334,5 @@ class ParallelExecutor:
             "pool": self.pool.get_pool_status(),
             "scheduler": self.scheduler.get_status(),
             "message_bus": self.message_bus.get_stats(),
+            "shared_context": self.shared_context.get_stats(),
         }
