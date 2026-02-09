@@ -259,7 +259,14 @@ orchestrator/
 
 ## Recent Session Notes
 
-### 2026-02-09
+### 2026-02-09 (Session 2)
+- Fixed Nexus API key loading (now accepts ANTHROPIC_API_KEY without prefix)
+- Added proper error handling (503 errors instead of 500 for missing API key)
+- Added startup banner showing config status
+- Created comprehensive ROADMAP.md with 6 development phases
+- Fixed Python 3.14 compatibility issue (use Python 3.13 or lower)
+
+### 2026-02-09 (Session 1)
 - Completed Nexus personal AI assistant (6 phases)
 - Fixed tool_use/tool_result trimming bug
 - Implemented token optimization strategies from LinkedIn recommendations
@@ -289,6 +296,30 @@ orchestrator/
 1. Verify `projects_dir` in config
 2. Check file permissions
 3. Confirm git branch is correct
+
+### Nexus API Key Not Loading
+1. Ensure `.env` file is in `nexus/` directory
+2. Use `ANTHROPIC_API_KEY=sk-ant-...` (no NEXUS_ prefix needed)
+3. Restart the app after editing `.env`
+4. Check startup logs for "Anthropic API: CONFIGURED" message
+5. Test with `GET /health` endpoint to verify config status
+
+### Nexus ChromaDB/Pydantic Error
+```
+pydantic.v1.errors.ConfigError: unable to infer type for attribute "chroma_server_nofile"
+```
+**Cause:** Python 3.14 incompatibility with ChromaDB
+**Fix:** Use Python 3.10, 3.11, 3.12, or 3.13 instead:
+```batch
+py -3.13 -m venv venv
+venv\Scripts\activate
+pip install -e .
+```
+
+### Nexus "Internal Server Error" on Ask/Briefing
+1. Check `/health` endpoint - `llm_configured` should be `true`
+2. Verify API key is valid (not expired, has credits)
+3. Check console for detailed error message
 
 ---
 
