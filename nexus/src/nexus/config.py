@@ -16,10 +16,10 @@ from pathlib import Path
 from typing import Literal, Optional
 
 from dotenv import load_dotenv
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Load .env file
+# Load .env file from current directory and parent directories
 load_dotenv()
 
 
@@ -35,11 +35,24 @@ class NexusConfig(BaseSettings):
 
     # ==========================================================================
     # API KEYS - Set these in your .env file
+    # These read BOTH with and without NEXUS_ prefix for convenience
     # ==========================================================================
     anthropic_api_key: str = Field(default="", description="Anthropic API key for Claude")
     openai_api_key: str = Field(default="", description="OpenAI API key (optional, for embeddings)")
     pinecone_api_key: str = Field(default="", description="Pinecone API key (optional, for cloud vector DB)")
     voyage_api_key: str = Field(default="", description="Voyage AI API key (optional, for embeddings)")
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # Also check for non-prefixed API keys (more common convention)
+        if not self.anthropic_api_key:
+            self.anthropic_api_key = os.getenv("ANTHROPIC_API_KEY", "")
+        if not self.openai_api_key:
+            self.openai_api_key = os.getenv("OPENAI_API_KEY", "")
+        if not self.pinecone_api_key:
+            self.pinecone_api_key = os.getenv("PINECONE_API_KEY", "")
+        if not self.voyage_api_key:
+            self.voyage_api_key = os.getenv("VOYAGE_API_KEY", "")
 
     # ==========================================================================
     # VECTOR DATABASE - Choose your storage backend

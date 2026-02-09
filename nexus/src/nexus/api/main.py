@@ -368,6 +368,21 @@ DASHBOARD_HTML = """
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
     # Startup
+    print("\n" + "="*60)
+    print("  NEXUS - Personal AI Assistant")
+    print("="*60)
+    print(f"  LLM Provider:     {config.llm_provider}")
+    if config.llm_provider == "claude":
+        key_status = "CONFIGURED" if config.anthropic_api_key else "NOT SET - Ask/Briefing will fail"
+        print(f"  Anthropic API:    {key_status}")
+    else:
+        key_status = "CONFIGURED" if config.openai_api_key else "NOT SET - Ask/Briefing will fail"
+        print(f"  OpenAI API:       {key_status}")
+    print(f"  Vector DB:        {config.vector_db}")
+    print(f"  Embeddings:       {config.embedding_provider}")
+    print(f"  Data Directory:   {config.data_dir}")
+    print("="*60 + "\n")
+
     nexus = get_nexus()
     await nexus.init()
     yield
@@ -404,8 +419,17 @@ def create_app() -> FastAPI:
 
     @app.get("/health")
     async def health():
-        """Health check."""
-        return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
+        """Health check - shows configuration status."""
+        return {
+            "status": "ok",
+            "timestamp": datetime.utcnow().isoformat(),
+            "config": {
+                "llm_provider": config.llm_provider,
+                "llm_configured": bool(config.anthropic_api_key) if config.llm_provider == "claude" else bool(config.openai_api_key),
+                "vector_db": config.vector_db,
+                "embedding_provider": config.embedding_provider,
+            }
+        }
 
     # --------------------------------------------------------------------------
     # INGESTION
@@ -481,9 +505,24 @@ def create_app() -> FastAPI:
     @app.post("/ask")
     async def ask(query: AskQuery):
         """Ask a question."""
-        nexus = get_nexus()
-        response = await nexus.response.ask_with_query(query)
-        return response
+        # Check for API key first
+        if not config.anthropic_api_key and config.llm_provider == "claude":
+            raise HTTPException(
+                status_code=503,
+                detail="Anthropic API key not configured. Add ANTHROPIC_API_KEY to your .env file."
+            )
+        if not config.openai_api_key and config.llm_provider == "openai":
+            raise HTTPException(
+                status_code=503,
+                detail="OpenAI API key not configured. Add OPENAI_API_KEY to your .env file."
+            )
+
+        try:
+            nexus = get_nexus()
+            response = await nexus.response.ask_with_query(query)
+            return response
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error generating response: {str(e)}")
 
     # --------------------------------------------------------------------------
     # ENTRIES
@@ -539,9 +578,19 @@ def create_app() -> FastAPI:
         if briefing_type not in ("daily", "weekly"):
             raise HTTPException(status_code=400, detail="Invalid briefing type")
 
-        nexus = get_nexus()
-        briefing = await nexus.briefing(briefing_type)
-        return {"briefing": briefing, "type": briefing_type}
+        # Check for API key first
+        if not config.anthropic_api_key and config.llm_provider == "claude":
+            raise HTTPException(
+                status_code=503,
+                detail="Anthropic API key not configured. Add ANTHROPIC_API_KEY to your .env file."
+            )
+
+        try:
+            nexus = get_nexus()
+            briefing = await nexus.briefing(briefing_type)
+            return {"briefing": briefing, "type": briefing_type}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error generating briefing: {str(e)}")
 
     # --------------------------------------------------------------------------
     # STATS
